@@ -1,0 +1,343 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 08a8af4..e931f30 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 2.8)
++cmake_minimum_required(VERSION 3.16)
+ project(ORB_SLAM2)
+ 
+ IF(NOT CMAKE_BUILD_TYPE)
+@@ -10,31 +10,13 @@ MESSAGE("Build type: " ${CMAKE_BUILD_TYPE})
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall  -O3 -march=native ")
+ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall   -O3 -march=native")
+ 
+-# Check C++11 or C++0x support
+-include(CheckCXXCompilerFlag)
+-CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
+-CHECK_CXX_COMPILER_FLAG("-std=c++0x" COMPILER_SUPPORTS_CXX0X)
+-if(COMPILER_SUPPORTS_CXX11)
+-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+-   add_definitions(-DCOMPILEDWITHC11)
+-   message(STATUS "Using flag -std=c++11.")
+-elseif(COMPILER_SUPPORTS_CXX0X)
+-   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+-   add_definitions(-DCOMPILEDWITHC0X)
+-   message(STATUS "Using flag -std=c++0x.")
+-else()
+-   message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
+-endif()
+-
++set(CMAKE_CXX_STANDARD 14)
++set(CMAKE_CXX_STANDARD_REQUIRED ON)
++add_definitions(-DCOMPILEDWITHC11)
++find_package(Threads REQUIRED)
+ LIST(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_modules)
+ 
+-find_package(OpenCV 3.0 QUIET)
+-if(NOT OpenCV_FOUND)
+-   find_package(OpenCV 2.4.3 QUIET)
+-   if(NOT OpenCV_FOUND)
+-      message(FATAL_ERROR "OpenCV > 2.4.3 not found.")
+-   endif()
+-endif()
++find_package(OpenCV 4 REQUIRED)
+ 
+ find_package(Eigen3 3.1.0 REQUIRED)
+ find_package(Pangolin REQUIRED)
+@@ -42,6 +24,7 @@ find_package(Pangolin REQUIRED)
+ include_directories(
+ ${PROJECT_SOURCE_DIR}
+ ${PROJECT_SOURCE_DIR}/include
++${OpenCV_INCLUDE_DIRS}
+ ${EIGEN3_INCLUDE_DIR}
+ ${Pangolin_INCLUDE_DIRS}
+ )
+@@ -72,6 +55,7 @@ src/Viewer.cc
+ 
+ target_link_libraries(${PROJECT_NAME}
+ ${OpenCV_LIBS}
++Threads::Threads
+ ${EIGEN3_LIBS}
+ ${Pangolin_LIBRARIES}
+ ${PROJECT_SOURCE_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
+diff --git a/Examples/RGB-D/rgbd_tum.cc b/Examples/RGB-D/rgbd_tum.cc
+index 001199d..69cbe12 100644
+--- a/Examples/RGB-D/rgbd_tum.cc
++++ b/Examples/RGB-D/rgbd_tum.cc
+@@ -19,6 +19,8 @@
+ */
+ 
+ 
++#include <unistd.h>
++#include <opencv2/imgcodecs.hpp>
+ #include<iostream>
+ #include<algorithm>
+ #include<fstream>
+@@ -77,8 +79,8 @@ int main(int argc, char **argv)
+     for(int ni=0; ni<nImages; ni++)
+     {
+         // Read image and depthmap from file
+-        imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni],CV_LOAD_IMAGE_UNCHANGED);
+-        imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni],CV_LOAD_IMAGE_UNCHANGED);
++        imRGB = cv::imread(string(argv[3])+"/"+vstrImageFilenamesRGB[ni],cv::IMREAD_UNCHANGED);
++        imD = cv::imread(string(argv[3])+"/"+vstrImageFilenamesD[ni],cv::IMREAD_UNCHANGED);
+         double tframe = vTimestamps[ni];
+ 
+         if(imRGB.empty())
+diff --git a/Thirdparty/DBoW2/CMakeLists.txt b/Thirdparty/DBoW2/CMakeLists.txt
+index 0eb5126..e768f5e 100644
+--- a/Thirdparty/DBoW2/CMakeLists.txt
++++ b/Thirdparty/DBoW2/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-cmake_minimum_required(VERSION 2.8)
++cmake_minimum_required(VERSION 3.16)
+ project(DBoW2)
+ 
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  -Wall  -O3 -march=native ")
+@@ -24,13 +24,7 @@ set(SRCS_DUTILS
+   DUtils/Random.cpp
+   DUtils/Timestamp.cpp)
+ 
+-find_package(OpenCV 3.0 QUIET)
+-if(NOT OpenCV_FOUND)
+-   find_package(OpenCV 2.4.3 QUIET)
+-   if(NOT OpenCV_FOUND)
+-      message(FATAL_ERROR "OpenCV > 2.4.3 not found.")
+-   endif()
+-endif()
++find_package(OpenCV 4 REQUIRED)
+ 
+ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
+ 
+diff --git a/Thirdparty/g2o/CMakeLists.txt b/Thirdparty/g2o/CMakeLists.txt
+index 620e688..c9f02b6 100644
+--- a/Thirdparty/g2o/CMakeLists.txt
++++ b/Thirdparty/g2o/CMakeLists.txt
+@@ -1,4 +1,4 @@
+-CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
++cmake_minimum_required(VERSION 3.16)
+ SET(CMAKE_LEGACY_CYGWIN_WIN32 0)
+ 
+ PROJECT(g2o)
+diff --git a/include/LoopClosing.h b/include/LoopClosing.h
+index 7eb0416..c3adf13 100644
+--- a/include/LoopClosing.h
++++ b/include/LoopClosing.h
+@@ -47,7 +47,7 @@ public:
+ 
+     typedef pair<set<KeyFrame*>,int> ConsistentGroup;    
+     typedef map<KeyFrame*,g2o::Sim3,std::less<KeyFrame*>,
+-        Eigen::aligned_allocator<std::pair<const KeyFrame*, g2o::Sim3> > > KeyFrameAndPose;
++        Eigen::aligned_allocator<std::pair<KeyFrame* const, g2o::Sim3> > > KeyFrameAndPose;
+ 
+ public:
+ 
+diff --git a/include/ORBextractor.h b/include/ORBextractor.h
+index 66e8e7a..268148a 100644
+--- a/include/ORBextractor.h
++++ b/include/ORBextractor.h
+@@ -23,7 +23,7 @@
+ 
+ #include <vector>
+ #include <list>
+-#include <opencv/cv.h>
++#include <opencv2/opencv.hpp>
+ 
+ 
+ namespace ORB_SLAM2
+diff --git a/src/FrameDrawer.cc b/src/FrameDrawer.cc
+index e23b86c..c7f9b45 100644
+--- a/src/FrameDrawer.cc
++++ b/src/FrameDrawer.cc
+@@ -18,6 +18,7 @@
+ * along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <opencv2/imgproc.hpp>
+ #include "FrameDrawer.h"
+ #include "Tracking.h"
+ 
+@@ -72,7 +73,7 @@ cv::Mat FrameDrawer::DrawFrame()
+     } // destroy scoped mutex -> release mutex
+ 
+     if(im.channels()<3) //this should be always true
+-        cvtColor(im,im,CV_GRAY2BGR);
++        cvtColor(im,im,cv::COLOR_GRAY2BGR);
+ 
+     //Draw
+     if(state==Tracking::NOT_INITIALIZED) //INITIALIZING
+diff --git a/src/LocalMapping.cc b/src/LocalMapping.cc
+index 6c87a6e..25730ec 100644
+--- a/src/LocalMapping.cc
++++ b/src/LocalMapping.cc
+@@ -18,6 +18,7 @@
+ * along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <unistd.h>
+ #include "LocalMapping.h"
+ #include "LoopClosing.h"
+ #include "ORBmatcher.h"
+diff --git a/src/LoopClosing.cc b/src/LoopClosing.cc
+index 5e317dd..5f43317 100644
+--- a/src/LoopClosing.cc
++++ b/src/LoopClosing.cc
+@@ -18,6 +18,7 @@
+ * along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <unistd.h>
+ #include "LoopClosing.h"
+ 
+ #include "Sim3Solver.h"
+diff --git a/src/PnPsolver.cc b/src/PnPsolver.cc
+index af3511b..4c3e1df 100644
+--- a/src/PnPsolver.cc
++++ b/src/PnPsolver.cc
+@@ -48,6 +48,7 @@
+ *   either expressed or implied, of the FreeBSD Project
+ */
+ 
++#include <opencv2/core/core_c.h>
+ #include <iostream>
+ 
+ #include "PnPsolver.h"
+diff --git a/src/Sim3Solver.cc b/src/Sim3Solver.cc
+index 4ad44ff..0ff7e73 100644
+--- a/src/Sim3Solver.cc
++++ b/src/Sim3Solver.cc
+@@ -214,7 +214,7 @@ cv::Mat Sim3Solver::find(vector<bool> &vbInliers12, int &nInliers)
+ 
+ void Sim3Solver::ComputeCentroid(cv::Mat &P, cv::Mat &Pr, cv::Mat &C)
+ {
+-    cv::reduce(P,C,1,CV_REDUCE_SUM);
++    cv::reduce(P,C,1,cv::REDUCE_SUM);
+     C = C/P.cols;
+ 
+     for(int i=0; i<P.cols; i++)
+diff --git a/src/System.cc b/src/System.cc
+index 8df4157..c94ab96 100644
+--- a/src/System.cc
++++ b/src/System.cc
+@@ -20,6 +20,7 @@
+ 
+ 
+ 
++#include <unistd.h>
+ #include "System.h"
+ #include "Converter.h"
+ #include <thread>
+@@ -315,8 +316,8 @@ void System::Shutdown()
+         usleep(5000);
+     }
+ 
+-    if(mpViewer)
+-        pangolin::BindToContext("ORB-SLAM2: Map Viewer");
++    // No further GL calls are needed in this thread after shutdown.
++    // Avoid rebinding the viewer context from another thread.
+ }
+ 
+ void System::SaveTrajectoryTUM(const string &filename)
+diff --git a/src/Tracking.cc b/src/Tracking.cc
+index 2273b2c..7afbf19 100644
+--- a/src/Tracking.cc
++++ b/src/Tracking.cc
+@@ -19,6 +19,8 @@
+ */
+ 
+ 
++#include <unistd.h>
++#include <opencv2/imgproc.hpp>
+ #include "Tracking.h"
+ 
+ #include<opencv2/core/core.hpp>
+@@ -173,26 +175,26 @@ cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRe
+     {
+         if(mbRGB)
+         {
+-            cvtColor(mImGray,mImGray,CV_RGB2GRAY);
+-            cvtColor(imGrayRight,imGrayRight,CV_RGB2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGB2GRAY);
++            cvtColor(imGrayRight,imGrayRight,cv::COLOR_RGB2GRAY);
+         }
+         else
+         {
+-            cvtColor(mImGray,mImGray,CV_BGR2GRAY);
+-            cvtColor(imGrayRight,imGrayRight,CV_BGR2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGR2GRAY);
++            cvtColor(imGrayRight,imGrayRight,cv::COLOR_BGR2GRAY);
+         }
+     }
+     else if(mImGray.channels()==4)
+     {
+         if(mbRGB)
+         {
+-            cvtColor(mImGray,mImGray,CV_RGBA2GRAY);
+-            cvtColor(imGrayRight,imGrayRight,CV_RGBA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGBA2GRAY);
++            cvtColor(imGrayRight,imGrayRight,cv::COLOR_RGBA2GRAY);
+         }
+         else
+         {
+-            cvtColor(mImGray,mImGray,CV_BGRA2GRAY);
+-            cvtColor(imGrayRight,imGrayRight,CV_BGRA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGRA2GRAY);
++            cvtColor(imGrayRight,imGrayRight,cv::COLOR_BGRA2GRAY);
+         }
+     }
+ 
+@@ -212,16 +214,16 @@ cv::Mat Tracking::GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const d
+     if(mImGray.channels()==3)
+     {
+         if(mbRGB)
+-            cvtColor(mImGray,mImGray,CV_RGB2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGB2GRAY);
+         else
+-            cvtColor(mImGray,mImGray,CV_BGR2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGR2GRAY);
+     }
+     else if(mImGray.channels()==4)
+     {
+         if(mbRGB)
+-            cvtColor(mImGray,mImGray,CV_RGBA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGBA2GRAY);
+         else
+-            cvtColor(mImGray,mImGray,CV_BGRA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGRA2GRAY);
+     }
+ 
+     if((fabs(mDepthMapFactor-1.0f)>1e-5) || imDepth.type()!=CV_32F)
+@@ -242,16 +244,16 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
+     if(mImGray.channels()==3)
+     {
+         if(mbRGB)
+-            cvtColor(mImGray,mImGray,CV_RGB2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGB2GRAY);
+         else
+-            cvtColor(mImGray,mImGray,CV_BGR2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGR2GRAY);
+     }
+     else if(mImGray.channels()==4)
+     {
+         if(mbRGB)
+-            cvtColor(mImGray,mImGray,CV_RGBA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_RGBA2GRAY);
+         else
+-            cvtColor(mImGray,mImGray,CV_BGRA2GRAY);
++            cvtColor(mImGray,mImGray,cv::COLOR_BGRA2GRAY);
+     }
+ 
+     if(mState==NOT_INITIALIZED || mState==NO_IMAGES_YET)
+diff --git a/src/Viewer.cc b/src/Viewer.cc
+index dec3204..8115b78 100644
+--- a/src/Viewer.cc
++++ b/src/Viewer.cc
+@@ -18,6 +18,7 @@
+ * along with ORB-SLAM2. If not, see <http://www.gnu.org/licenses/>.
+ */
+ 
++#include <unistd.h>
+ #include "Viewer.h"
+ #include <pangolin/pangolin.h>
+ 
