@@ -9,4 +9,4 @@ SLAM 实验课程材料。
 
 ## Gmapping 实验
 
-- [Gmapping建图实验指导书.docx](Gampping/Gmapping建图实验指导书.docx)：TurtleBot3、Gazebo、Gmapping 安装，编译及运行全流程。
+- [Gmapping建图实验指导书.docx](Gmapping/Gmapping建图实验指导书.docx)：TurtleBot3、Gazebo、Gmapping 安装，编译及运行全流程。
