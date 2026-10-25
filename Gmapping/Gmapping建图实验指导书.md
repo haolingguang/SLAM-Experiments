@@ -480,6 +480,277 @@ eog ~/map/tb3_gmapping.pgm &        # 无图形界面可把文件拷出到本机
 | 4 | 地图成功保存 | 生成 tb3_gmapping.pgm 与 tb3_gmapping.yaml |
 | 5 | 三张截图齐全 | step1/step3/step5 三张图已存入实验报告 |
 
+
+
+## 六、结合Nav2进行仿真导航
+
+### 6.1 安装 Nav2
+
+继续使用你已经设置好的 Ubuntu 和 ROS 2 国内 APT 源：
+
+```bash
+sudo apt update
+sudo apt install -y \
+  ros-humble-navigation2 \
+  ros-humble-nav2-bringup \
+  ros-humble-nav2-rviz-plugins \
+  python3-yaml
+```
+
+`navigation2` 安装导航功能，`nav2_bringup` 提供启动文件和默认配置，RViz 插件提供导航面板与目标工具，`python3-yaml` 用于生成配置和检查地图文件。[^3]
+
+这里使用 Nav2 的 Humble 二进制包，不需要额外克隆源码、重新编译 Gazebo，或修改现有仓库的下载地址。若更新索引仍有“不能解析域名”等错误，先恢复联网，再继续安装。
+
+安装完成后执行：
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 pkg prefix nav2_bringup
+ros2 pkg prefix nav2_rviz_plugins
+```
+
+两项都应找到安装位置。以后启动终端时仍使用原来的 `use_tb3.bash`，保持相同的 `ROS_DOMAIN_ID` 和仿真环境。
+
+### 6.2 检查 YAML 指向的图像是否存在
+
+APT 安装完成后，在终端完整执行：
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+
+map_file = Path.home() / "gmapping_ws/maps/tb3_gmapping.yaml"
+if not map_file.is_file():
+    raise SystemExit(f"找不到地图：{map_file}。请先保存地图或核对文件名。")
+data = yaml.safe_load(map_file.read_text(encoding="utf-8"))
+required = {"image", "resolution", "origin", "negate", "occupied_thresh", "free_thresh"}
+if not isinstance(data, dict) or not required.issubset(data) or not data["image"]:
+    raise SystemExit("地图 YAML 字段不完整，请检查保存的地图文件。")
+if str(data["image"]).startswith("~"):
+    raise SystemExit("image 字段请使用相对路径或完整绝对路径，不使用 ~。")
+image_file = Path(data["image"])
+if not image_file.is_absolute():
+    image_file = map_file.parent / image_file
+if not image_file.is_file():
+    raise SystemExit(f"YAML 指向的图像不存在：{image_file}")
+if float(data.get("resolution", 0)) <= 0 or len(data.get("origin", [])) != 3:
+    raise SystemExit("地图 resolution 或 origin 配置不完整。")
+print("地图 YAML：", map_file)
+print("地图图像：", image_file.resolve())
+print("分辨率：", data["resolution"])
+print("地图文件检查通过。")
+PY
+```
+
+`image` 为相对路径时，是相对于 YAML 所在目录查找图像。若它保留了其他电脑的绝对路径，应核对实际图像位置后修正这个字段。不要修改 `resolution` 或 `origin` 来迁就显示位置，这会改变地图的物理含义。[^4]
+
+### 6.3 生成本次导航配置
+
+完整复制代码块，包括最后单独一行的 `PY`。若目标文件已经存在，程序会停止并保留它们；后续正常启动不需要重新生成配置。
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+
+python3 - <<'PY'
+from pathlib import Path
+import yaml
+from ament_index_python.packages import get_package_share_directory
+
+share = Path(get_package_share_directory("nav2_bringup"))
+folder = Path.home() / "gmapping_ws/nav2"
+params_file = folder / "nav2_params.yaml"
+rviz_file = folder / "navigation.rviz"
+if params_file.exists() or rviz_file.exists():
+    raise SystemExit("导航配置已存在，已保留原文件。已有完整配置时跳过本节。")
+config = yaml.safe_load((share / "params/nav2_params.yaml").read_text())
+rviz = yaml.safe_load((share / "rviz/nav2_default_view.rviz").read_text())
+
+def enable_sim_time(node):
+    if isinstance(node, dict):
+        if "use_sim_time" in node:
+            node["use_sim_time"] = True
+        for value in node.values():
+            enable_sim_time(value)
+    elif isinstance(node, list):
+        for value in node:
+            enable_sim_time(value)
+
+enable_sim_time(config)
+amcl = config["amcl"]["ros__parameters"]
+amcl.update(base_frame_id="base_footprint", odom_frame_id="odom",
+            global_frame_id="map", scan_topic="/scan")
+controller = config["controller_server"]["ros__parameters"]
+controller["controller_frequency"] = 10.0
+controller["progress_checker"]["required_movement_radius"] = 0.1
+dwb = controller["FollowPath"]
+if dwb["plugin"] != "dwb_core::DWBLocalPlanner":
+    raise SystemExit("本机模板不是预期的 Humble DWB 配置，请先核对版本。")
+dwb.update(max_vel_x=0.15, max_speed_xy=0.15, max_vel_theta=0.8,
+           trans_stopped_velocity=0.05, vy_samples=1)
+
+for name in ("local_costmap", "global_costmap"):
+    costmap = config[name][name]["ros__parameters"]
+    costmap.pop("footprint", None)
+    costmap["robot_radius"] = 0.1
+config["planner_server"]["ros__parameters"]["GridBased"]["allow_unknown"] = False
+smoother = config["velocity_smoother"]["ros__parameters"]
+smoother["max_velocity"] = [0.15, 0.0, 0.8]
+smoother["min_velocity"] = [-0.15, 0.0, -0.8]
+
+def prepare_displays(items):
+    for item in items:
+        if item.get("Name") in {"Bumper Hit", "Downsampled Costmap", "VoxelGrid", "Realsense"}:
+            item["Enabled"] = False
+            item["Value"] = False
+        if item.get("Class") == "rviz_default_plugins/RobotModel":
+            item["Enabled"] = True
+            item["Value"] = True
+            item["Description Topic"]["Durability Policy"] = "Transient Local"
+        if isinstance(item.get("Displays"), list):
+            prepare_displays(item["Displays"])
+
+prepare_displays(rviz["Visualization Manager"]["Displays"])
+rviz["Visualization Manager"]["Global Options"]["Fixed Frame"] = "map"
+folder.mkdir(parents=True, exist_ok=True)
+params_file.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+rviz_file.write_text(yaml.safe_dump(rviz, sort_keys=False), encoding="utf-8")
+print("已生成：", params_file)
+print("已生成：", rviz_file)
+PY
+```
+
+生成的配置使用约 0.10 米的圆形机器人半径，最高前进速度设为 0.15 米/秒，最高角速度设为 0.8 弧度/秒，适合作为本次 Burger 仿真的起始配置。机器人半径参考 ROBOTIS 的 Burger 参数；速度是本教程选用的低速设置。[^7]
+
+两种速度限制同时写入局部控制器和速度平滑器，避免两者上限不一致。本次全局规划禁止穿过未知区域，因此后面应在已经扫描出的连通区域内选目标。上述配置只适用于本次仿真型号，换车或换场景后应重新核对。
+
+### 6.4 先结束上一轮建图
+
+如果原来的仿真仍在运行，依次完成：
+
+1. 在键盘遥控终端按空格或 `s`，使小车停止，再按 `Ctrl+C` 退出遥控。
+2. 确认地图已保存，再在 Gmapping 终端按 `Ctrl+C`。
+3. 关闭建图时的 RViz。
+4. 在原 Gazebo 启动终端按 `Ctrl+C`，等原仿真正常退出。
+
+下面重新启动同一个世界，让导航从固定的初始场景开始。每次只保留一套 Gazebo 和一套导航系统；不要在它们上面再启动第二套完整仿真。
+
+### 6.5 终端A 启动 Gazebo
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+```
+
+等待原来的 TurtleBot3 World 场景和 Burger 小车出现。如果底部显示暂停状态，点击播放，让仿真时间前进。保持终端A运行。
+
+### 6.6 终端B 启动定位和导航
+
+另开一个终端：
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+
+ros2 launch nav2_bringup bringup_launch.py \
+  map:="$HOME/gmapping_ws/maps/tb3_gmapping.yaml" \
+  params_file:="$HOME/gmapping_ws/nav2/nav2_params.yaml" \
+  use_sim_time:=true \
+  slam:=False \
+  autostart:=true \
+  use_composition:=False
+```
+
+这条命令启动地图服务、AMCL 和导航节点。`slam:=False` 表示加载已有地图；`use_sim_time:=true` 使用 Gazebo 时间；`autostart:=true` 自动配置和激活节点。关闭组合进程是为了便于在终端区分各节点日志。这里的 `False` 按命令所示使用首字母大写，以兼容启动文件中的 Python 条件表达式。[^2]
+
+此时还没有输入初始位置，可能暂时出现等待 `map → odom` 的提示。先继续打开 RViz 并设置初始位姿，不要为消除提示添加一个固定的 `map → odom` 静态变换。
+
+### 6.7 终端C 启动导航用 RViz
+
+再开一个终端：
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+
+rviz2 -d "$HOME/gmapping_ws/nav2/navigation.rviz" \
+  --ros-args -p use_sim_time:=true
+```
+
+窗口中应包含保存的地图、激光显示及 `Navigation 2` 面板。需要时双击 RViz 标题栏最大化窗口。确认左侧 `Global Options → Fixed Frame` 为 `map`。
+
+若界面没有导航面板，选择 `Panels → Add New Panel`，找到 `nav2_rviz_plugins` 下的 `Navigation 2` 后添加。若缺少目标工具，点击顶部工具栏的 `+`，添加 `nav2_rviz_plugins` 下的导航目标工具。
+
+配图位置：Gazebo 场景与 RViz 已加载地图的界面。
+
+### 6.8 告诉 AMCL 小车从哪里出发
+
+初始位置要设置为机器人在当前地图中的实际位置，朝向也要一致：[^8]
+
+1. 看 Gazebo，确认小车位于哪一片区域、面向哪个方向，可借助附近墙角和障碍物对照地图。
+2. 在 RViz 顶部点击 `2D Pose Estimate`。
+3. 在地图上小车实际所在位置按住鼠标左键。
+4. 拖动箭头，使箭头朝向与小车朝向一致，然后松开鼠标。
+5. 观察激光点与地图中的墙体、障碍边缘是否大致重合；不重合时重新设置位置和方向。
+
+Gazebo 世界坐标与 Gmapping 地图坐标不一定相同。默认仿真启动文件中的出生位置为世界坐标 `x=-2.0、y=-0.5`，不能直接将这一对数值当作地图初始位姿。地图 YAML 的 `origin` 也不是机器人初始位置。[^9]
+
+本次定位应看到机器人模型或姿态标记落在正确区域，激光轮廓与保存的地图对应。粒子显示初期较分散是正常现象，收到更多有效观测后会逐渐收敛。
+
+配图位置：`2D Pose Estimate` 按钮，以及设置后激光与墙体对齐的效果。
+
+### 6.9 需要时小幅辅助定位
+
+如果初始估计已接近正确位置，但仍需让 AMCL 收集更多观测，可以临时开终端D：
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 run turtlebot3_teleop teleop_keyboard
+```
+
+在空旷位置低速前后移动一点或小角度转动，观察激光与地图对齐。随后按空格停止，再按 `Ctrl+C` 退出遥控。**发送自主导航目标前，关闭遥控节点。**[^8]
+
+### 6.10 确认导航系统已就绪
+
+设置初始位置后，可在一个新终端查看：
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 lifecycle get /amcl
+ros2 lifecycle get /controller_server
+ros2 lifecycle get /bt_navigator
+```
+
+正常情况下都应为 `active [3]`，RViz 的导航面板显示导航已激活。如果仍在等待，先按第9章检查时间、激光和 TF，再发送目标。
+
+### 6.11 发送第一个目标
+
+1. 在 RViz 顶部点击导航目标工具，通常显示为 `Nav2 Goal` 或 `Navigation2 Goal`。
+2. 在小车附近、已经建好的白色可通行区域选一个位置。第一次选距离约1米、通路清楚的目标，避开墙边和灰色未知区域。
+3. 在目标点按住鼠标左键，拖出箭头，指定小车到达后的朝向。
+4. 松开鼠标，目标随即发送。
+5. 保持 Gazebo、Nav2 和 RViz 三个终端运行，观察全局路径及 Gazebo 中的小车运动。[^8]
+
+正常情况下，无需再按 `w/a/s/d`。小车会沿规划路线行驶，到达后调整到目标朝向并停止。终端或导航面板应报告本次目标成功，例如 `Goal succeeded` 或 `SUCCEEDED`。
+
+### 6.12 验证绕障到达另一个目标
+
+第一个目标完成后，选第二个目标：让起点与终点之间有场景中的固定障碍，但地图上存在可绕行的白色通路。仍用导航目标工具点击、拖动朝向并松开。
+
+观察 RViz 中的规划路线绕过障碍，小车跟随路线到达目标。目标点应位于已建图且与当前位置连通的区域；没有可行通路时，导航会失败，而不是穿过障碍到达。
+
+配图位置：第二个目标的规划路径、Gazebo 中的小车位置和目标成功状态。
+
+### 6.13 取消导航和正常结束
+
+如果需要取消当前任务，在 RViz 的 `Navigation 2` 面板点击 `Cancel`，等待任务取消、小车停止。需要立即暂停仿真时，先点击 Gazebo 底部的暂停按钮，再处理导航任务。[^10]
+
+实验结束时，先取消未完成的目标，再依次在终端B、C、A按 `Ctrl+C`，结束 Nav2、RViz 和 Gazebo。单独发送一次零速度不等于取消导航任务，规划控制器仍可能继续发布速度。
+
+### 6.14 下次如何启动
+
+已经装好 Nav2、保存地图并生成配置后，下次从第5.2节开始，依次启动终端A、B、C，再设置初始位置和目标即可。无需重新建图或重新生成配置。
+
+如果只重启了 Gazebo，仿真时间会重新从零开始。首次排查时建议把本次 Nav2 和 RViz 也一起正常关闭，再按三终端顺序重新启动。
+
 ## 🛠️ 六、常见问题速查
 
 | **现象** | **原因 / 解决办法** |
@@ -496,10 +767,20 @@ eog ~/map/tb3_gmapping.pgm &        # 无图形界面可把文件拷出到本机
 1. Gmapping 和"边走边画"的直觉区别在哪？为什么它需要激光雷达和里程计**两类**数据？
 2. 实验中若让小车快速急转弯，地图为什么容易重影？这与粒子滤波的"粒子"有什么关系？
 3. 本实验保存的是 `.pgm` + `.yaml` 两张文件，它们分别存了什么？为什么导航时要一起用？
+4. 已经保存了 Gmapping 地图，为什么自主导航时仍需要 AMCL 定位，并在 RViz 中设置初始位姿？如果初始位置或朝向设置错误，激光点与地图会出现什么现象？
+5. Nav2 的全局路径规划与局部避障分别解决什么问题？若目标点看起来在白色空地上，小车却无法到达，应如何从定位是否准确、通路是否连通，以及机器人尺寸与障碍物间距三个方面分析原因？
 
 ## 📎 八、附录：命令速查与参考资料
 
 ### （一）命令速查
+
+#### 1. 新终端加载实验环境
+
+ ```bash
+ source "$HOME/gmapping_ws/use_tb3.bash"
+ ```
+
+### 2. 仿真与建图常用命令
 
 | **用途** | **命令** |
 | --- | --- |
@@ -508,6 +789,70 @@ eog ~/map/tb3_gmapping.pgm &        # 无图形界面可把文件拷出到本机
 | 键盘遥控 | `ros2 run turtlebot3_teleop teleop_keyboard` |
 | 保存地图 | `ros2 run nav2_map_server map_saver_cli -f ~/map/my_map` |
 | 检查话题 | `ros2 topic echo /scan --once` |
+
+保存地图时，保持 Gmapping 运行，在新终端加载环境后执行：
+
+```bash
+mkdir -p "$HOME/gmapping_ws/maps"
+ros2 run nav2_map_server map_saver_cli \
+  -f "$HOME/gmapping_ws/maps/tb3_gmapping" \
+  --ros-args \
+  -p use_sim_time:=true \
+  -p save_map_timeout:=20.0 \
+  -p map_subscribe_transient_local:=true
+```
+
+这会生成 tb3_gmapping.pgm 和 tb3_gmapping.yaml；重复保存会覆盖同名地图。需要保留旧地图时，先修改 -f 后的文件名前缀。
+
+### 3. 自主导航三终端命令
+
+先按第6.4节结束上一轮建图、遥控、RViz 和仿真，再按 A、B、C 的顺序启动。导航使用与建图时相同的 TurtleBot3 World 场景；AMCL 定位时不要同时运行 Gmapping。
+
+**终端A** **启动 Gazebo**
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+```
+
+**终端B** **启动地图服务、AMCL** **和 Nav2**
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+ros2 launch nav2_bringup bringup_launch.py \
+  map:="$HOME/gmapping_ws/maps/tb3_gmapping.yaml" \
+  params_file:="$HOME/gmapping_ws/nav2/nav2_params.yaml" \
+  use_sim_time:=true \
+  slam:=False \
+  autostart:=true \
+  use_composition:=False
+```
+
+**终端C** **打开导航用 RViz**
+
+```bash
+source "$HOME/gmapping_ws/use_tb3.bash"
+rviz2 -d "$HOME/gmapping_ws/nav2/navigation.rviz" \
+  --ros-args -p use_sim_time:=true
+```
+
+在 RViz 中先用 2D Pose Estimate 设置机器人在地图中的实际位置与朝向；激光与墙体对齐、导航就绪后，再用 Nav2 Goal 或 Navigation2 Goal 发送目标。需要取消任务时，在 Navigation 2 面板点击 Cancel。
+
+#### 4. 导航状态与故障定位
+
+在新终端加载实验环境后执行；以下命令用于查看状态，不会替代初始位姿设置或导航目标操作。
+
+| **用途**                   | **命令**                                 |
+| -------------------------- | ---------------------------------------- |
+| 检查 AMCL 定位节点         | ros2  lifecycle get /amcl                |
+| 检查控制器节点             | ros2  lifecycle get /controller_server   |
+| 检查导航行为树节点         | ros2  lifecycle get /bt_navigator        |
+| 检查仿真时间是否前进       | ros2  topic echo /clock --once           |
+| 查看地图到机器人坐标变换   | ros2  run tf2_ros tf2_echo map base_link |
+| 查看速度话题的发布与订阅端 | ros2  topic info /cmd_vel -v             |
+| 查看导航动作接口           | ros2  action list                        |
+
+设置初始位姿并完成启动后，前三个节点通常应显示 active [3]。tf2_echo 会持续输出，检查后按 Ctrl+C 退出。导航过程中取消任务请使用 RViz 面板；单次发布零速度不能代替取消目标。
 
 ### （二）参考资料
 
