@@ -1,13 +1,3 @@
 {
-  "issues": {
-    "3": {
-      "row": 0,
-      "team": "验证队-请勿报名",
-      "members": [
-        "验证甲",
-        "验证丁"
-      ],
-      "author": "haolingguang"
-    }
-  }
+  "issues": {}
 }
