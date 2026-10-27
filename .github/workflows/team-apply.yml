@@ -14,37 +14,59 @@ concurrency:
 
 jobs:
   register:
-    # 只处理「组队报名」模板提交的 Issue（标题以 [组队] 开头）
-    if: startsWith(github.event.issue.title, '[组队]')
+    # 只处理「组队报名」表单提交的 Issue（标题以 [组队] 开头）
+    # labeled 事件只在「取消报名」时才有意义，其余标签变化一律忽略，
+    # 否则创建 Issue 时 opened + labeled 会同时触发，跑两遍导致 push 冲突。
+    if: >-
+      startsWith(github.event.issue.title, '[组队]') &&
+      (github.event.action != 'labeled' ||
+       contains(github.event.issue.labels.*.name, '取消报名'))
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+      ISSUE_TITLE: ${{ github.event.issue.title }}
+      ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
     steps:
       - name: 拉取仓库
         uses: actions/checkout@v4
+        with:
+          # 关键：事件快照的 github.sha 可能已过期，必须显式拉默认分支最新提交
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: 解析并登记
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
-          ISSUE_TITLE: ${{ github.event.issue.title }}
-          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
-        run: python3 "大作业组队/scripts/apply_team.py"
+      - name: 解析并校验
+        run: python3 "大作业组队/scripts/apply_team.py" plan
 
       - name: 提交改动
+        id: commit
         run: |
           git config user.name  "team-bot"
           git config user.email "team-bot@users.noreply.github.com"
           git add -A
           if git diff --staged --quiet; then
-            echo "没有需要提交的改动"
-          else
-            git commit -m "登记组队 #${{ github.event.issue.number }}"
-            git push
+            echo "nochange" > "$RUNNER_TEMP/push_status"
+            echo "没有文件改动（可能是重复触发），跳过提交"
+            exit 0
           fi
+          git commit -m "登记组队 #${{ github.event.issue.number }}"
+          git pull --rebase --autostash origin "${{ github.event.repository.default_branch }}"
+          git push origin HEAD
+          echo "success" > "$RUNNER_TEMP/push_status"
+
+      - name: 回复结果
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/push_status" ]; then
+            export PUSH_STATUS="$(cat "$RUNNER_TEMP/push_status")"
+          else
+            export PUSH_STATUS="failed"
+          fi
+          python3 "大作业组队/scripts/apply_team.py" notify
