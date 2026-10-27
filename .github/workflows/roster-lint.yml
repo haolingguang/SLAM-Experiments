@@ -1,0 +1,18 @@
+name: 名单表检查
+
+on:
+  pull_request:
+    paths:
+      - '大作业组队/roster.csv'
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 检查 roster.csv
+        run: python3 "大作业组队/scripts/check_roster.py"

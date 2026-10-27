@@ -1,0 +1,50 @@
+name: 组队报名自动登记
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: team-roster
+  cancel-in-progress: false
+
+jobs:
+  register:
+    # 只处理「组队报名」模板提交的 Issue（标题以 [组队] 开头）
+    if: startsWith(github.event.issue.title, '[组队]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 解析并登记
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
+        run: python3 "大作业组队/scripts/apply_team.py"
+
+      - name: 提交改动
+        run: |
+          git config user.name  "team-bot"
+          git config user.email "team-bot@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "没有需要提交的改动"
+          else
+            git commit -m "登记组队 #${{ github.event.issue.number }}"
+            git push
+          fi
