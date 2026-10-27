@@ -1,3 +1,13 @@
 {
-  "issues": {}
+  "issues": {
+    "1": {
+      "row": 0,
+      "team": "测试队-请勿报名",
+      "members": [
+        "测试甲",
+        "测试乙"
+      ],
+      "author": "haolingguang"
+    }
+  }
 }
