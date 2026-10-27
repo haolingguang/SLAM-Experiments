@@ -50,8 +50,8 @@ body:
   - type: input
     id: phone
     attributes:
-      label: 队长联系电话（可留空）
-      description: 建议填手机号；若不想公开，可填学号或手机号后四位
+      label: 队长联系电话（选填）
+      description: 可以不填。仓库是公开的，若要填，建议只写手机号后四位或学号
       placeholder: "13800001234"
     validations:
       required: false
