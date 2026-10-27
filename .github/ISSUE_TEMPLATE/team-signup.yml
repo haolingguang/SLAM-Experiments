@@ -1,0 +1,65 @@
+name: 组队报名
+description: 由队长填写一次，机器人会自动登记到名单表中
+title: "[组队] "
+labels: ["组队报名"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### 填写须知
+
+        - **每队只由队长提交一次**，队员不要重复提交。
+        - 每队 **1~3 人**，姓名请填真实姓名，不要加空格或括号。
+        - 提交后机器人会在下方自动回复登记结果：
+          - ✅ 显示登记成功 → 本队已完成报名，无需再做任何事；
+          - ❌ 显示失败原因 → 直接点右上角 **Edit** 修改本 Issue 内容，机器人会自动重新校验。
+
+  - type: input
+    id: team
+    attributes:
+      label: 队伍名称
+      description: 全仓库唯一，建议简短好记，例如「导航小分队」
+      placeholder: 导航小分队
+    validations:
+      required: true
+
+  - type: input
+    id: member1
+    attributes:
+      label: 成员1姓名（队长）
+      placeholder: 张三
+    validations:
+      required: true
+
+  - type: input
+    id: member2
+    attributes:
+      label: 成员2姓名（没有则留空）
+      placeholder: 李四
+    validations:
+      required: false
+
+  - type: input
+    id: member3
+    attributes:
+      label: 成员3姓名（没有则留空）
+      placeholder: 王五
+    validations:
+      required: false
+
+  - type: input
+    id: phone
+    attributes:
+      label: 队长联系电话（可留空）
+      description: 建议填手机号；若不想公开，可填学号或手机号后四位
+      placeholder: 13800001234
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我已征得本队全部成员同意，且以上信息填写无误
+          required: true

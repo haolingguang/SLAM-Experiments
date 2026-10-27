@@ -10,3 +10,7 @@ SLAM 实验课程材料。
 ## Gmapping 实验
 
 - [Gmapping建图实验指导书.md](Gmapping/Gmapping建图实验指导书.md)：TurtleBot3、Gazebo、Gmapping 安装，编译及运行全流程。
+
+## 大作业组队
+
+- [机器人定位与导航大作业组队名单](大作业组队/README.md)：学生自主组队报名入口与实时分组表。
