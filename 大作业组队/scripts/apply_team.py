@@ -31,10 +31,12 @@ README_PATH = ROOT / "README.md"
 STATE_PATH = REPO_ROOT / ".github" / "state.json"
 RESULT_PATH = Path(tempfile.gettempdir()) / "roster_result.json"
 
-HEADER = ["序号", "成员1", "成员2", "成员3", "联系电话"]
+HEADER = ["序号", "成员1", "成员2", "成员3", "备注"]
 MAX_MEMBERS = 3
 MIN_MEMBERS = 1
 TEAM_NAME_MAX = 30
+NOTE_MAX = 100          # 备注长度上限（字）
+NOTE_TABLE_MAX = 30     # README 表格内备注显示上限（字），超出用 … 截断
 
 EMPTY_TOKENS = {"", "_no response_", "无", "没有", "-", "—", "空", "none"}
 CANCEL_LABEL = "取消报名"
@@ -135,7 +137,7 @@ def collect_members(sections: dict[str, str]) -> list[str]:
 # --------------------------------------------------------------------------
 # 校验
 # --------------------------------------------------------------------------
-def validate(team, members, phone, rows, state, issue_number) -> list[str]:
+def validate(team, members, note, rows, state, issue_number) -> list[str]:
     errors = []
     if not team:
         errors.append("队伍名称不能为空。")
@@ -174,8 +176,10 @@ def validate(team, members, phone, rows, state, issue_number) -> list[str]:
         if n in owner_of:
             errors.append(f"「{n}」已登记在序号 {owner_of[n]} 的队伍中，不能重复组队。")
 
-    if phone and not re.fullmatch(r"[0-9+\-\s]{4,20}", phone):
-        errors.append("联系电话格式不正确，请只填数字（可含 - 或空格），或留空。")
+    if len(note) > NOTE_MAX:
+        errors.append(f"备注过长（{len(note)} 字），请控制在 {NOTE_MAX} 字以内。")
+    if re.search(r"1[3-9]\d{9}", note):
+        errors.append("备注里请不要填写手机号，本名单是公开的。")
 
     return errors
 
@@ -183,19 +187,19 @@ def validate(team, members, phone, rows, state, issue_number) -> list[str]:
 # --------------------------------------------------------------------------
 # 写入
 # --------------------------------------------------------------------------
-def upsert_row(members, phone, rows, prev_row):
+def upsert_row(members, note, rows, prev_row):
     payload = members + [""] * (MAX_MEMBERS - len(members))
     if prev_row is not None and 0 <= prev_row < len(rows):
         seq = rows[prev_row][0] or str(prev_row + 1)
-        rows[prev_row] = [seq, payload[0], payload[1], payload[2], phone]
+        rows[prev_row] = [seq, payload[0], payload[1], payload[2], note]
         return prev_row, rows
 
     for i, r in enumerate(rows):
         if not any(r[1:4]):
-            rows[i] = [r[0] or str(i + 1), payload[0], payload[1], payload[2], phone]
+            rows[i] = [r[0] or str(i + 1), payload[0], payload[1], payload[2], note]
             return i, rows
 
-    rows.append([str(len(rows) + 1), payload[0], payload[1], payload[2], phone])
+    rows.append([str(len(rows) + 1), payload[0], payload[1], payload[2], note])
     return len(rows) - 1, rows
 
 
@@ -212,22 +216,19 @@ START_MARK = "<!-- ROSTER:START -->"
 END_MARK = "<!-- ROSTER:END -->"
 
 
-def mask_phone(p: str) -> str:
-    if len(p) >= 11:
-        return p[:3] + "****" + p[-4:]
-    if len(p) >= 7:
-        return p[:2] + "****"
-    return p
+def clip(s: str, limit: int = NOTE_TABLE_MAX) -> str:
+    s = s.replace("\r", " ").replace("\n", " ").strip()
+    return s if len(s) <= limit else s[:limit] + "…"
 
 
 def render_table(rows) -> str:
     lines = [
         START_MARK,
-        "| 序号 | 成员1 | 成员2 | 成员3 | 联系电话 |",
+        "| 序号 | 成员1 | 成员2 | 成员3 | 备注 |",
         "| :--: | :-- | :-- | :-- | :-- |",
     ]
     for r in rows:
-        cells = [r[0], r[1], r[2], r[3], mask_phone(r[4]) if r[4] else ""]
+        cells = [r[0], r[1], r[2], r[3], clip(r[4]) if r[4] else ""]
         cells = [c.replace("|", "\\|") for c in cells]
         lines.append("| " + " | ".join(cells) + " |")
     lines.append(END_MARK)
@@ -305,9 +306,9 @@ def do_plan() -> int:
 
     team = pick(sections, "队伍名称")
     members = collect_members(sections)
-    phone = pick(sections, "联系电话")
+    note = pick(sections, "备注")
 
-    errors = validate(team, members, phone, rows, state, issue_number)
+    errors = validate(team, members, note, rows, state, issue_number)
     if errors:
         RESULT_PATH.write_text(
             json.dumps({"status": "error", "errors": errors}, ensure_ascii=False),
@@ -316,7 +317,7 @@ def do_plan() -> int:
         print("validation failed:", errors)
         return 0
 
-    idx, rows = upsert_row(members, phone, rows, prev_row)
+    idx, rows = upsert_row(members, note, rows, prev_row)
     write_rows(rows)
     sync_readme(rows)
     state["issues"][issue_number] = {
@@ -333,7 +334,7 @@ def do_plan() -> int:
         "team": team,
         "seq": rows[idx][0],
         "members": members,
-        "phone": phone,
+        "note": note,
     }
     RESULT_PATH.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     print(f"registered: team={team} row={idx} seq={rows[idx][0]}")
@@ -387,8 +388,8 @@ def do_notify() -> int:
     body += f"- **队伍名称**：{result.get('team')}\n"
     body += f"- **名单序号**：{result.get('seq')}\n"
     body += f"- **成员**：{'、'.join(members)}（共 {len(members)} 人）\n"
-    if result.get("phone"):
-        body += f"- **联系电话**：{result['phone']}\n"
+    if result.get("note"):
+        body += f"- **备注**：{result['note']}\n"
     body += (
         "\n名单已写入 `roster.csv`，并同步更新了组队名单页面。\n\n"
         "需要**修改成员**：直接 Edit 本 Issue 后保存，系统会自动覆盖原来那一行。\n\n"

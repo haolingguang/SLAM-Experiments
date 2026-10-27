@@ -47,12 +47,12 @@ body:
     validations:
       required: false
 
-  - type: input
-    id: phone
+  - type: textarea
+    id: note
     attributes:
-      label: 队长联系电话（选填）
-      description: 可以不填。仓库是公开的，若要填，建议只写手机号后四位或学号
-      placeholder: "13800001234"
+      label: 备注（选填）
+      description: 可以不填。例如需要特殊设备、时间安排有冲突等。本页公开可见，请勿填写手机号等个人隐私。
+      placeholder: 例如：队里有一人周五下午有课，希望排在后半场
     validations:
       required: false
 

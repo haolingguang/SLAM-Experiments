@@ -7,12 +7,12 @@
 本脚本会在 CI 中检查这个 PR 是否破坏了名单规则。
 
 检查项：
-  1. 表头必须是 序号,成员1,成员2,成员3,联系电话
+  1. 表头必须是 序号,成员1,成员2,成员3,备注
   2. 每行最多 3 名成员
   3. 同一队内成员不重名
   4. 全表成员不重复
   5. 每行至少 1 名成员（空行允许保留）
-  6. 电话号码格式
+  6. 备注长度不超过 100 字，且不含手机号
 """
 import csv
 import re
@@ -20,7 +20,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-HEADER = ["序号", "成员1", "成员2", "成员3", "联系电话"]
+HEADER = ["序号", "成员1", "成员2", "成员3", "备注"]
+NOTE_MAX = 100
 CSV_PATH = Path(__file__).resolve().parent.parent / "roster.csv"
 
 
@@ -56,9 +57,11 @@ def main() -> int:
         for m in members:
             names[m] += 1
 
-        phone = r[4]
-        if phone and not re.fullmatch(r"[0-9+\-\s]{4,20}", phone):
-            errors.append(f"序号 {seq}：电话格式不正确（{phone}）")
+        note = r[4]
+        if len(note) > NOTE_MAX:
+            errors.append(f"序号 {seq}：备注超过 {NOTE_MAX} 字（{len(note)} 字）")
+        if re.search(r"1[3-9]\d{9}", note):
+            errors.append(f"序号 {seq}：备注中疑似填写了手机号")
 
     for name, cnt in names.items():
         if cnt > 1:
